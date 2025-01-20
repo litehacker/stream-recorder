@@ -84,13 +84,9 @@ async fn main() -> Result<(), AppError> {
         .route("/api/rooms", post(handlers::room::create_room))
         .route("/api/rooms/:id/recordings", get(handlers::room::list_recordings))
         .route("/api/rooms/:id/ws", get(handlers::stream::ws_handler))
-        .layer(
-            ServiceBuilder::new()
-                .layer(TraceLayer::new_for_http())
-                .layer(CorsLayer::permissive())
-                .layer(CompressionLayer::new())
-                .layer(TimeoutLayer::new(Duration::from_secs(30)))
-        )
+        .layer(TraceLayer::new_for_http())
+        .layer(CorsLayer::permissive())
+        .layer(TimeoutLayer::new(Duration::from_secs(30)))
         .with_state(state);
 
     // Start server

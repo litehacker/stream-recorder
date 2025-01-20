@@ -282,8 +282,9 @@ pub fn monitor_gc() {
                 interval.tick().await;
                 
                 let last_gc = LAST_GC_TIME.load(Ordering::Relaxed);
-                let now = Instant::now()
-                    .duration_since(Instant::from_std(Duration::ZERO))
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
                     .as_secs() as i64;
                 
                 if now - last_gc > 3600 { // 1 hour

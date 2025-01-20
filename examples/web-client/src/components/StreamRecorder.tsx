@@ -88,7 +88,7 @@ export const StreamRecorder: React.FC<StreamRecorderProps> = ({
     };
 
     ws.onerror = (error) => {
-      onError(error as Error);
+      onError(error as unknown as Error);
     };
   };
 
@@ -217,7 +217,7 @@ export const StreamRecorder: React.FC<StreamRecorderProps> = ({
         <div>Deduplication: {(stats.deduplicationRatio * 100).toFixed(1)}%</div>
       </div>
 
-      <style jsx>{`
+      <style>{`
         .stream-recorder {
           display: flex;
           flex-direction: column;

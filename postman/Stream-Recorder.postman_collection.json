@@ -1,0 +1,152 @@
+{
+  "info": {
+    "_postman_id": "1a2b3c4d-5e6f-7g8h-9i0j-1k2l3m4n5o6p",
+    "name": "Stream Recorder API",
+    "description": "Collection for testing Stream Recorder endpoints",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "auth_token",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/health",
+          "host": ["{{base_url}}"],
+          "path": ["health"]
+        }
+      }
+    },
+    {
+      "name": "Get Metrics",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/metrics",
+          "host": ["{{base_url}}"],
+          "path": ["metrics"]
+        }
+      }
+    },
+    {
+      "name": "Generate Auth Credentials",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "var jsonData = pm.response.json();",
+              "pm.collectionVariables.set('auth_token', jsonData.token);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/auth/credentials",
+          "host": ["{{base_url}}"],
+          "path": ["api", "auth", "credentials"]
+        }
+      }
+    },
+    {
+      "name": "Create Room",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{auth_token}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Test Room\",\n  \"max_participants\": 10,\n  \"recording_enabled\": true\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/api/rooms",
+          "host": ["{{base_url}}"],
+          "path": ["api", "rooms"]
+        }
+      }
+    },
+    {
+      "name": "List Room Recordings",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{auth_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/rooms/:id/recordings",
+          "host": ["{{base_url}}"],
+          "path": ["api", "rooms", ":id", "recordings"],
+          "variable": [
+            {
+              "key": "id",
+              "value": "ROOM_ID",
+              "description": "Replace with actual room ID"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "WebSocket Connection",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{auth_token}}",
+            "type": "text"
+          },
+          {
+            "key": "Upgrade",
+            "value": "websocket",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/rooms/:id/ws",
+          "host": ["{{base_url}}"],
+          "path": ["api", "rooms", ":id", "ws"],
+          "variable": [
+            {
+              "key": "id",
+              "value": "ROOM_ID",
+              "description": "Replace with actual room ID"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
