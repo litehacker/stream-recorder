@@ -1,107 +1,84 @@
+/*
+ * handlers/analytics.rs
+ * Purpose: Analytics and metrics endpoints
+ * 
+ * This file contains:
+ * - Room analytics collection and reporting
+ * - User analytics aggregation
+ * - Performance metrics recording
+ * - Resource usage tracking
+ * - Analytics data structures
+ */
+
 use axum::{
     extract::{Path, State},
     Json,
 };
-use uuid::Uuid;
-use crate::{
-    AppState,
-    models::{StreamMetrics, RoomAnalytics, UserAnalytics},
-};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tracing::info;
+
+use crate::{AppState, error::AppError};
+
+#[derive(Debug, Deserialize)]
+pub struct MetricsRequest {
+    pub room_id: String,
+    pub bytes_transferred: u64,
+    pub frames_processed: u64,
+    pub error_count: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RoomAnalytics {
+    pub total_bytes: u64,
+    pub total_frames: u64,
+    pub error_rate: f64,
+    pub avg_latency_ms: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserAnalytics {
+    pub total_rooms: u64,
+    pub total_storage: u64,
+    pub total_bandwidth: u64,
+}
 
 pub async fn record_metrics(
-    State(state): State<AppState>,
-    Json(metrics): Json<StreamMetrics>,
-) -> Json<()> {
-    sqlx::query!(
-        "INSERT INTO stream_metrics 
-         (id, room_id, timestamp, bytes_transferred, frames_processed, 
-          frames_deduplicated, current_bitrate, current_fps, peak_memory_mb)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-        Uuid::new_v4(),
-        metrics.room_id,
-        metrics.timestamp,
-        metrics.bytes_transferred,
-        metrics.frames_processed,
-        metrics.frames_deduplicated,
-        metrics.current_bitrate,
-        metrics.current_fps,
-        metrics.peak_memory_mb,
-    )
-    .execute(&state.db)
-    .await
-    .unwrap();
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<MetricsRequest>,
+) -> Result<(), AppError> {
+    info!("Recording metrics for room {}", request.room_id);
 
-    Json(())
+    // Update metrics store
+    state.metrics.record_bytes(request.room_id.clone(), request.bytes_transferred);
+    state.metrics.record_frames(request.room_id.clone(), request.frames_processed);
+    state.metrics.record_errors(request.room_id, request.error_count);
+
+    Ok(())
 }
 
 pub async fn get_room_analytics(
-    State(state): State<AppState>,
-    Path(room_id): Path<Uuid>,
-) -> Json<RoomAnalytics> {
-    let analytics = sqlx::query_as!(
-        RoomAnalytics,
-        "SELECT 
-            total_storage_used,
-            total_stream_time,
-            total_recordings,
-            avg_bitrate,
-            avg_fps,
-            deduplication_ratio
-         FROM room_analytics
-         WHERE room_id = $1",
-        room_id
-    )
-    .fetch_one(&state.db)
-    .await
-    .unwrap();
-
-    Json(analytics)
+    State(state): State<Arc<AppState>>,
+    Path(room_id): Path<String>,
+) -> Result<Json<RoomAnalytics>, AppError> {
+    let metrics = state.metrics.get_room_metrics(&room_id).await?;
+    
+    Ok(Json(RoomAnalytics {
+        total_bytes: metrics.bytes_transferred,
+        total_frames: metrics.frames_processed,
+        error_rate: metrics.error_rate,
+        avg_latency_ms: metrics.avg_latency,
+    }))
 }
 
 pub async fn get_user_analytics(
-    State(state): State<AppState>,
-    Path(user_id): Path<Uuid>,
-) -> Json<UserAnalytics> {
-    let user = sqlx::query!(
-        "SELECT quota_limit, quota_used FROM users WHERE id = $1",
-        user_id
-    )
-    .fetch_one(&state.db)
-    .await
-    .unwrap();
-
-    let rooms_analytics = sqlx::query_as!(
-        RoomAnalytics,
-        "SELECT 
-            total_storage_used,
-            total_stream_time,
-            total_recordings,
-            avg_bitrate,
-            avg_fps,
-            deduplication_ratio
-         FROM room_analytics
-         WHERE user_id = $1",
-        user_id
-    )
-    .fetch_all(&state.db)
-    .await
-    .unwrap();
-
-    let total_storage: i64 = rooms_analytics
-        .iter()
-        .map(|r| r.total_storage_used)
-        .sum();
-
-    let total_stream_time: i64 = rooms_analytics
-        .iter()
-        .map(|r| r.total_stream_time)
-        .sum();
-
-    Json(UserAnalytics {
-        total_rooms: rooms_analytics.len() as i64,
-        total_storage_used: total_storage,
-        total_stream_time,
-        quota_percentage: (user.quota_used as f32 / user.quota_limit as f32) * 100.0,
-        rooms_analytics,
-    })
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<UserAnalytics>, AppError> {
+    let metrics = state.metrics.get_user_metrics().await?;
+    
+    Ok(Json(UserAnalytics {
+        total_rooms: metrics.total_rooms,
+        total_storage: metrics.total_storage,
+        total_bandwidth: metrics.total_bandwidth,
+    }))
 } 

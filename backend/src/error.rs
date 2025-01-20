@@ -1,3 +1,15 @@
+/*
+ * error.rs
+ * Purpose: Error handling and error type definitions
+ * 
+ * This file contains:
+ * - Custom AppError type with various error variants
+ * - Error response formatting and serialization
+ * - Error metrics collection and monitoring
+ * - Error conversion implementations for standard error types
+ * - Performance-optimized logging macros for errors
+ */
+
 use thiserror::Error;
 use axum::{
     response::{IntoResponse, Response},
@@ -6,37 +18,47 @@ use axum::{
 };
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
+use serde::Serialize;
+use std::{fmt, io};
 
 // Error metrics for monitoring
 static TOTAL_ERRORS: AtomicU64 = AtomicU64::new(0);
 static STREAMING_ERRORS: AtomicU64 = AtomicU64::new(0);
 static STORAGE_ERRORS: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Error, Debug)]
+#[derive(Debug)]
 pub enum AppError {
-    #[error("Authentication failed: {0}")]
-    AuthError(String),
-
-    #[error("Database error: {0}")]
-    DatabaseError(#[from] sqlx::Error),
-
-    #[error("Storage error: {0}")]
+    Unauthorized(String),
+    NotFound(String),
+    ResourceExhausted(String),
+    TooManyConnections(String),
     StorageError(String),
-
-    #[error("Streaming error: {0}")]
     StreamingError(String),
-
-    #[error("Rate limit exceeded: {0}")]
-    RateLimitError(String),
-
-    #[error("Resource not found: {0}")]
-    NotFoundError(String),
-
-    #[error("Invalid request: {0}")]
-    ValidationError(String),
+    InternalError(String),
 }
 
-// Performance-optimized error response
+#[derive(Debug, Serialize)]
+struct ErrorResponse {
+    code: u16,
+    message: String,
+}
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppError::Unauthorized(msg) => write!(f, "Unauthorized: {}", msg),
+            AppError::NotFound(msg) => write!(f, "Not found: {}", msg),
+            AppError::ResourceExhausted(msg) => write!(f, "Resource exhausted: {}", msg),
+            AppError::TooManyConnections(msg) => write!(f, "Too many connections: {}", msg),
+            AppError::StorageError(msg) => write!(f, "Storage error: {}", msg),
+            AppError::StreamingError(msg) => write!(f, "Streaming error: {}", msg),
+            AppError::InternalError(msg) => write!(f, "Internal error: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for AppError {}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         // Increment error metrics atomically
@@ -53,28 +75,52 @@ impl IntoResponse for AppError {
             _ => {}
         }
 
-        // Map error types to status codes
-        let (status, error_message) = match self {
-            AppError::AuthError(_) => (StatusCode::UNAUTHORIZED, self.to_string()),
-            AppError::DatabaseError(ref e) => {
-                // Log database errors with more detail for debugging
-                tracing::error!(error = ?e, "Database error occurred");
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
-            }
-            AppError::StorageError(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
-            AppError::StreamingError(_) => (StatusCode::BAD_REQUEST, self.to_string()),
-            AppError::RateLimitError(_) => (StatusCode::TOO_MANY_REQUESTS, self.to_string()),
-            AppError::NotFoundError(_) => (StatusCode::NOT_FOUND, self.to_string()),
-            AppError::ValidationError(_) => (StatusCode::BAD_REQUEST, self.to_string()),
+        let (status, message) = match self {
+            AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            AppError::ResourceExhausted(msg) => (StatusCode::TOO_MANY_REQUESTS, msg),
+            AppError::TooManyConnections(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg),
+            AppError::StorageError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            AppError::StreamingError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            AppError::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
 
-        // Create error response with minimal allocation
-        let body = Json(json!({
-            "error": error_message,
-            "code": status.as_u16()
-        }));
+        let body = Json(ErrorResponse {
+            code: status.as_u16(),
+            message,
+        });
 
         (status, body).into_response()
+    }
+}
+
+impl From<io::Error> for AppError {
+    fn from(err: io::Error) -> Self {
+        AppError::InternalError(err.to_string())
+    }
+}
+
+impl From<std::net::AddrParseError> for AppError {
+    fn from(err: std::net::AddrParseError) -> Self {
+        AppError::InternalError(err.to_string())
+    }
+}
+
+impl From<hyper::Error> for AppError {
+    fn from(err: hyper::Error) -> Self {
+        AppError::InternalError(err.to_string())
+    }
+}
+
+impl From<jsonwebtoken::errors::Error> for AppError {
+    fn from(err: jsonwebtoken::errors::Error) -> Self {
+        AppError::InternalError(err.to_string())
+    }
+}
+
+impl From<std::fmt::Error> for AppError {
+    fn from(err: std::fmt::Error) -> Self {
+        AppError::InternalError(err.to_string())
     }
 }
 

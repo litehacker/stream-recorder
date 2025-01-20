@@ -73,11 +73,23 @@ A high-performance video streaming and recording solution with WebRTC support.
    ```
 
 3. **Node.js and npm (for web client)**
+
    ```bash
-   # Using nvm (recommended)
-   curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
-   nvm install 16
-   nvm use 16
+   # Install nvm (Node Version Manager)
+   curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+
+   # Reload shell configuration
+   export NVM_DIR="$HOME/.nvm"
+   [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+   [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+
+   # Install and use LTS version of Node.js
+   nvm install --lts
+   nvm use --lts
+
+   # Verify installation
+   node --version
+   npm --version
    ```
 
 ### Installation

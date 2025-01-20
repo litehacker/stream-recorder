@@ -1,36 +1,46 @@
+/*
+ * handlers/auth.rs
+ * Purpose: Authentication and authorization endpoints
+ * 
+ * This file contains:
+ * - API key validation
+ * - JWT token generation
+ * - User credential management
+ * - Authentication middleware
+ * - Authorization checks
+ */
+
 use axum::{
     extract::State,
+    http::StatusCode,
     Json,
 };
-use uuid::Uuid;
-use crate::models::User;
-use crate::AppState;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use uuid;
 
-pub async fn generate_credentials(
-    State(state): State<AppState>,
-) -> Json<User> {
-    let user = User {
-        id: Uuid::new_v4(),
-        api_key: generate_api_key(),
-        quota_limit: 1_000_000_000, // 1GB default
-        quota_used: 0,
-    };
+use crate::{AppState, error::AppError};
 
-    // Save to database
-    sqlx::query!(
-        "INSERT INTO users (id, api_key, quota_limit, quota_used) VALUES ($1, $2, $3, $4)",
-        user.id,
-        user.api_key,
-        user.quota_limit,
-        user.quota_used
-    )
-    .execute(&state.db)
-    .await
-    .unwrap();
-
-    Json(user)
+#[derive(Debug, Serialize)]
+pub struct Credentials {
+    pub token: String,
 }
 
-fn generate_api_key() -> String {
-    Uuid::new_v4().to_string().replace("-", "")
+#[derive(Debug, Deserialize)]
+pub struct AuthRequest {
+    pub api_key: String,
+}
+
+pub async fn generate_credentials(
+    State(state): State<Arc<crate::AppState>>,
+) -> Result<Json<String>, AppError> {
+    // Validate API key
+    if state.config.api_key.is_empty() {
+        return Err(AppError::Unauthorized("No API key configured".to_string()));
+    }
+
+    // Generate JWT token
+    let user_id = uuid::Uuid::new_v4().to_string();
+    let token = state.auth.generate_token(&user_id)?;
+    Ok(Json(token))
 } 

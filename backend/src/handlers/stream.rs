@@ -1,139 +1,95 @@
+/*
+ * handlers/stream.rs
+ * Purpose: WebSocket streaming handler implementation
+ * 
+ * This file contains:
+ * - WebSocket connection handling and upgrade
+ * - Stream message processing and broadcasting
+ * - Room connection management
+ * - Recording functionality for streams
+ */
+
 use std::sync::Arc;
 use axum::{
-    extract::{ws::{WebSocket, Message}, State, WebSocketUpgrade},
+    extract::{Path, State, WebSocketUpgrade, ws::{Message, WebSocket}},
     response::IntoResponse,
 };
 use futures::{stream::StreamExt, SinkExt};
 use tokio::sync::broadcast;
-use uuid::Uuid;
+use tracing::{error, info};
 use crate::{
     AppState,
-    models::{WebSocketMessage, FrameType, ControlAction},
+    error::AppError,
 };
-use redis::AsyncCommands;
 
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-    room_id: String,
-) -> impl IntoResponse {
-    ws.on_upgrade(|socket| handle_socket(socket, state, room_id))
+    Path(room_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<impl IntoResponse, AppError> {
+    // Validate room exists
+    let _room = state.rooms.get_room(&room_id).await?;
+
+    // Check connection limits
+    state.connection_tracker.check_limits(&room_id).await;
+
+    // Get stream for room
+    let tx = state.rooms.get_stream(&room_id).await?;
+
+    info!("New WebSocket connection for room {}", room_id);
+
+    // Upgrade connection
+    Ok(ws.on_upgrade(move |socket| handle_socket(socket, room_id, state, tx)))
 }
 
-async fn handle_socket(socket: WebSocket, state: AppState, room_id: String) {
+async fn handle_socket(
+    socket: WebSocket,
+    room_id: String,
+    state: Arc<AppState>,
+    tx: broadcast::Sender<Vec<u8>>,
+) {
     let (mut sender, mut receiver) = socket.split();
-    let (tx, _rx) = broadcast::channel(100);
-    let tx = Arc::new(tx);
-    
-    // Get Redis connection
-    let mut redis = state.redis.get_async_connection().await.unwrap();
-    
-    // Frame processing task
-    let process_frames = async move {
-        while let Some(Ok(msg)) = receiver.next().await {
+
+    // Handle incoming messages
+    tokio::spawn(async move {
+        while let Some(msg) = receiver.next().await {
             match msg {
-                Message::Binary(data) => {
-                    if let Ok(ws_msg) = serde_json::from_slice::<WebSocketMessage>(&data) {
-                        match ws_msg {
-                            WebSocketMessage::Frame { timestamp, data, frame_type } => {
-                                process_frame(
-                                    &mut redis,
-                                    &room_id,
-                                    timestamp,
-                                    data,
-                                    frame_type
-                                ).await;
-                            }
-                            WebSocketMessage::Control { action } => {
-                                handle_control_action(action, &room_id, &state).await;
-                            }
-                        }
+                Ok(msg) => {
+                    // Process message
+                    if let Err(e) = process_message(msg, &room_id, &state).await {
+                        error!("Error processing message: {}", e);
+                        break;
                     }
                 }
-                Message::Close(_) => break,
-                _ => {}
+                Err(e) => {
+                    error!("WebSocket error: {}", e);
+                    break;
+                }
             }
         }
-    };
+    });
 
-    tokio::select! {
-        _ = process_frames => {}
-    }
-}
-
-async fn process_frame(
-    redis: &mut redis::aio::Connection,
-    room_id: &str,
-    timestamp: i64,
-    data: Vec<u8>,
-    frame_type: FrameType,
-) {
-    match frame_type {
-        FrameType::Video => {
-            // Generate frame hash for deduplication
-            let frame_hash = calculate_frame_hash(&data);
-            
-            // Check if this frame is a duplicate
-            let key = format!("frame:{}:{}", room_id, frame_hash);
-            let exists: bool = redis.exists(&key).await.unwrap_or(false);
-            
-            if !exists {
-                // Store new frame
-                let _: () = redis.set_ex(&key, timestamp, 3600).await.unwrap_or(());
-                
-                // Store frame in MinIO/S3
-                store_frame(room_id, timestamp, &data).await;
-            } else {
-                // Update timestamp for duplicate frame
-                let _: () = redis.set_ex(&key, timestamp, 3600).await.unwrap_or(());
-            }
-        }
-        FrameType::Audio => {
-            // Always store audio frames
-            store_frame(room_id, timestamp, &data).await;
+    // Handle outgoing messages
+    let mut rx = tx.subscribe();
+    while let Ok(msg) = rx.recv().await {
+        if let Err(e) = sender.send(Message::Binary(msg)).await {
+            error!("Error sending message: {}", e);
+            break;
         }
     }
 }
 
-async fn handle_control_action(action: ControlAction, room_id: &str, state: &AppState) {
-    match action {
-        ControlAction::StartRecording => {
-            let recording_id = Uuid::new_v4();
-            sqlx::query!(
-                "INSERT INTO recordings (id, room_id, start_time, status) 
-                 VALUES ($1, $2, CURRENT_TIMESTAMP, 'Recording')",
-                recording_id,
-                Uuid::parse_str(room_id).unwrap(),
-            )
-            .execute(&state.db)
-            .await
-            .unwrap();
+async fn process_message(msg: Message, room_id: &str, state: &AppState) -> Result<(), AppError> {
+    match msg {
+        Message::Binary(data) => {
+            // Store frame
+            state.storage.save_recording(room_id, &data).await?;
+            Ok(())
         }
-        ControlAction::StopRecording => {
-            sqlx::query!(
-                "UPDATE recordings 
-                 SET end_time = CURRENT_TIMESTAMP, status = 'Completed' 
-                 WHERE room_id = $1 AND status = 'Recording'",
-                Uuid::parse_str(room_id).unwrap(),
-            )
-            .execute(&state.db)
-            .await
-            .unwrap();
+        Message::Close(_) => {
+            info!("Client disconnected from room {}", room_id);
+            Ok(())
         }
-        _ => {}
+        _ => Ok(()),
     }
-}
-
-fn calculate_frame_hash(data: &[u8]) -> String {
-    use std::hash::{Hash, Hasher};
-    use std::collections::hash_map::DefaultHasher;
-    
-    let mut hasher = DefaultHasher::new();
-    data.hash(&mut hasher);
-    hasher.finish().to_string()
-}
-
-async fn store_frame(room_id: &str, timestamp: i64, data: &[u8]) {
-    // TODO: Implement MinIO/S3 storage
-    // This will be implemented in the storage module
 } 

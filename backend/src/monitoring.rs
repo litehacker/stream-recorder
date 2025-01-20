@@ -1,11 +1,28 @@
+/*
+ * monitoring.rs
+ * Purpose: Application monitoring and metrics collection
+ * 
+ * This file contains:
+ * - MetricsStore for collecting application-wide metrics
+ * - ResourceMonitor for tracking system resources (CPU, memory)
+ * - ConnectionTracker for managing active WebSocket connections
+ * - Performance metrics collection and reporting
+ * - Garbage collection monitoring
+ */
+
 use std::{
     sync::atomic::{AtomicU64, AtomicI64, Ordering},
     time::{Duration, Instant},
     collections::HashMap,
+    sync::{Arc, RwLock},
 };
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock as TokioRwLock, Mutex};
 use metrics::{counter, gauge, histogram};
-use crate::logging::log_performance_metrics;
+use crate::{
+    error::AppError,
+    logging::log_performance_metrics,
+};
+use tracing::{info, warn};
 
 // Performance metrics
 static ACTIVE_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
@@ -13,240 +30,243 @@ static BYTES_TRANSFERRED: AtomicU64 = AtomicU64::new(0);
 static PEAK_MEMORY_USAGE: AtomicU64 = AtomicU64::new(0);
 static LAST_GC_TIME: AtomicI64 = AtomicI64::new(0);
 
-// Real-time metrics storage
+// Metrics store for collecting application metrics
+#[derive(Clone)]
 pub struct MetricsStore {
-    latencies: RwLock<HashMap<String, Vec<f64>>>,
-    error_rates: RwLock<HashMap<String, (u64, u64)>>, // (errors, total)
-    throughput: RwLock<HashMap<String, Vec<(i64, u64)>>>, // (timestamp, count)
+    requests: Arc<RwLock<HashMap<String, u64>>>,
+    errors: Arc<RwLock<HashMap<String, u64>>>,
+    latencies: Arc<RwLock<HashMap<String, Vec<f64>>>>,
 }
 
 impl MetricsStore {
     pub fn new() -> Self {
         Self {
-            latencies: RwLock::new(HashMap::new()),
-            error_rates: RwLock::new(HashMap::new()),
-            throughput: RwLock::new(HashMap::new()),
+            requests: Arc::new(RwLock::new(HashMap::new())),
+            errors: Arc::new(RwLock::new(HashMap::new())),
+            latencies: Arc::new(RwLock::new(HashMap::new())),
         }
-    }
-
-    pub async fn record_latency(&self, endpoint: &str, duration: f64) {
-        let mut latencies = self.latencies.write().await;
-        latencies
-            .entry(endpoint.to_string())
-            .or_insert_with(Vec::new)
-            .push(duration);
-
-        // Record to metrics system
-        histogram!("request_duration_seconds", duration, "endpoint" => endpoint.to_string());
-    }
-
-    pub async fn record_error(&self, endpoint: &str) {
-        let mut error_rates = self.error_rates.write().await;
-        let (errors, total) = error_rates
-            .entry(endpoint.to_string())
-            .or_insert((0, 0));
-        *errors += 1;
-        *total += 1;
-
-        // Record to metrics system
-        counter!("request_errors_total", 1, "endpoint" => endpoint.to_string());
     }
 
     pub async fn record_request(&self, endpoint: &str) {
-        let timestamp = Instant::now()
-            .duration_since(Instant::from_std(Duration::ZERO))
-            .as_secs() as i64;
+        let mut requests = self.requests.write().unwrap();
+        *requests.entry(endpoint.to_string()).or_insert(0) += 1;
+    }
 
-        let mut throughput = self.throughput.write().await;
-        let entries = throughput
-            .entry(endpoint.to_string())
-            .or_insert_with(Vec::new);
+    pub async fn record_error(&self, endpoint: &str) {
+        let mut errors = self.errors.write().unwrap();
+        *errors.entry(endpoint.to_string()).or_insert(0) += 1;
+    }
+
+    pub async fn record_latency(&self, endpoint: &str, latency: f64) {
+        let mut latencies = self.latencies.write().unwrap();
+        latencies.entry(endpoint.to_string())
+            .or_insert_with(Vec::new)
+            .push(latency);
+    }
+
+    pub async fn get_total_requests(&self) -> u64 {
+        let requests = self.requests.read().unwrap();
+        requests.values().sum()
+    }
+
+    pub async fn get_error_rate(&self) -> f64 {
+        let requests = self.requests.read().unwrap();
+        let errors = self.errors.read().unwrap();
         
-        entries.push((timestamp, 1));
+        let total_requests: u64 = requests.values().sum();
+        let total_errors: u64 = errors.values().sum();
         
-        // Cleanup old entries (keep last hour)
-        let cutoff = timestamp - 3600;
-        entries.retain(|(ts, _)| *ts > cutoff);
-
-        // Record to metrics system
-        counter!("requests_total", 1, "endpoint" => endpoint.to_string());
+        if total_requests == 0 {
+            0.0
+        } else {
+            (total_errors as f64 / total_requests as f64) * 100.0
+        }
     }
 
-    pub async fn get_error_rate(&self, endpoint: &str) -> f64 {
-        let error_rates = self.error_rates.read().await;
-        if let Some((errors, total)) = error_rates.get(endpoint) {
-            if *total > 0 {
-                return *errors as f64 / *total as f64;
-            }
+    pub async fn get_avg_latency(&self) -> f64 {
+        let latencies = self.latencies.read().unwrap();
+        let mut total = 0.0;
+        let mut count = 0;
+        
+        for values in latencies.values() {
+            total += values.iter().sum::<f64>();
+            count += values.len();
         }
-        0.0
+        
+        if count == 0 {
+            0.0
+        } else {
+            total / count as f64
+        }
     }
 
-    pub async fn get_average_latency(&self, endpoint: &str) -> f64 {
-        let latencies = self.latencies.read().await;
-        if let Some(values) = latencies.get(endpoint) {
-            if !values.is_empty() {
-                return values.iter().sum::<f64>() / values.len() as f64;
-            }
-        }
-        0.0
+    pub fn record_bytes(&self, room_id: String, bytes: u64) {
+        let mut requests = self.requests.write().unwrap();
+        *requests.entry(format!("bytes_{}", room_id)).or_insert(0) += bytes;
     }
 
-    pub async fn get_requests_per_second(&self, endpoint: &str) -> f64 {
-        let throughput = self.throughput.read().await;
-        if let Some(entries) = throughput.get(endpoint) {
-            if entries.len() < 2 {
-                return 0.0;
-            }
-            
-            let now = Instant::now()
-                .duration_since(Instant::from_std(Duration::ZERO))
-                .as_secs() as i64;
-            let window = 60; // 1 minute window
-            let cutoff = now - window;
-            
-            let recent_requests: u64 = entries
-                .iter()
-                .filter(|(ts, _)| *ts > cutoff)
-                .map(|(_, count)| count)
-                .sum();
-            
-            return recent_requests as f64 / window as f64;
-        }
-        0.0
+    pub fn record_frames(&self, room_id: String, frames: u64) {
+        let mut requests = self.requests.write().unwrap();
+        *requests.entry(format!("frames_{}", room_id)).or_insert(0) += frames;
+    }
+
+    pub fn record_errors(&self, room_id: String, count: u64) {
+        let mut errors = self.errors.write().unwrap();
+        *errors.entry(room_id).or_insert(0) += count;
+    }
+
+    pub async fn get_room_metrics(&self, room_id: &str) -> Result<RoomMetrics, AppError> {
+        let requests = self.requests.read().unwrap();
+        let errors = self.errors.read().unwrap();
+        let latencies = self.latencies.read().unwrap();
+
+        Ok(RoomMetrics {
+            bytes_transferred: *requests.get(&format!("bytes_{}", room_id)).unwrap_or(&0),
+            frames_processed: *requests.get(&format!("frames_{}", room_id)).unwrap_or(&0),
+            error_rate: errors.get(room_id).copied().unwrap_or(0) as f64,
+            avg_latency: latencies.get(room_id)
+                .map(|v| v.iter().sum::<f64>() / v.len() as f64)
+                .unwrap_or(0.0),
+        })
+    }
+
+    pub async fn get_user_metrics(&self) -> Result<UserMetrics, AppError> {
+        let requests = self.requests.read().unwrap();
+        
+        Ok(UserMetrics {
+            total_rooms: requests.keys()
+                .filter(|k| k.starts_with("frames_"))
+                .count() as u64,
+            total_storage: requests.iter()
+                .filter(|(k, _)| k.starts_with("bytes_"))
+                .map(|(_, &v)| v)
+                .sum(),
+            total_bandwidth: requests.iter()
+                .filter(|(k, _)| k.starts_with("bytes_"))
+                .map(|(_, &v)| v)
+                .sum(),
+        })
     }
 }
 
-// Resource monitoring
+#[derive(Debug, Clone)]
+pub struct RoomMetrics {
+    pub bytes_transferred: u64,
+    pub frames_processed: u64,
+    pub error_rate: f64,
+    pub avg_latency: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct UserMetrics {
+    pub total_rooms: u64,
+    pub total_storage: u64,
+    pub total_bandwidth: u64,
+}
+
+// Resource monitor for tracking system resources
+#[derive(Clone)]
 pub struct ResourceMonitor {
-    memory_threshold: u64,
-    cpu_threshold: f64,
+    memory_threshold: Arc<RwLock<u64>>,
+    cpu_threshold: Arc<RwLock<f64>>,
+    memory_usage: Arc<RwLock<u64>>,
+    cpu_usage: Arc<RwLock<f64>>,
 }
 
 impl ResourceMonitor {
-    pub fn new(memory_threshold_mb: u64, cpu_threshold_percent: f64) -> Self {
+    pub fn new() -> Self {
         Self {
-            memory_threshold: memory_threshold_mb * 1024 * 1024,
-            cpu_threshold: cpu_threshold_percent,
+            memory_threshold: Arc::new(RwLock::new(90)),  // 90% threshold
+            cpu_threshold: Arc::new(RwLock::new(80.0)),   // 80% threshold
+            memory_usage: Arc::new(RwLock::new(0)),
+            cpu_usage: Arc::new(RwLock::new(0.0)),
         }
     }
 
-    pub fn check_resources(&self) -> bool {
-        let memory_ok = self.check_memory();
-        let cpu_ok = self.check_cpu();
+    pub async fn update_metrics(&self) {
+        // Update memory usage
+        if let Ok(memory) = sys_info::mem_info() {
+            let total = memory.total;
+            let free = memory.free;
+            let used = total - free;
+            let usage_percent = (used as f64 / total as f64) * 100.0;
+            *self.memory_usage.write().unwrap() = usage_percent as u64;
+        }
 
-        // Record metrics
-        gauge!("memory_usage_bytes", self.get_memory_usage() as f64);
-        gauge!("cpu_usage_percent", self.get_cpu_usage());
-
-        memory_ok && cpu_ok
-    }
-
-    fn check_memory(&self) -> bool {
-        let usage = self.get_memory_usage();
-        PEAK_MEMORY_USAGE.fetch_max(usage, Ordering::Relaxed);
-        
-        if usage > self.memory_threshold {
-            log_performance_metrics(
-                "memory_threshold_exceeded",
-                usage as f64 / (1024.0 * 1024.0),
-                Some("memory")
-            );
-            false
-        } else {
-            true
+        // Update CPU usage
+        if let Ok(cpu) = sys_info::loadavg() {
+            *self.cpu_usage.write().unwrap() = cpu.one;
         }
     }
 
-    fn check_cpu(&self) -> bool {
-        let usage = self.get_cpu_usage();
-        if usage > self.cpu_threshold {
-            log_performance_metrics(
-                "cpu_threshold_exceeded",
-                usage,
-                Some("cpu")
-            );
-            false
-        } else {
-            true
-        }
+    pub async fn is_memory_critical(&self) -> bool {
+        let usage = *self.memory_usage.read().unwrap();
+        let threshold = *self.memory_threshold.read().unwrap();
+        usage > threshold
     }
 
-    fn get_memory_usage(&self) -> u64 {
-        #[cfg(target_os = "linux")]
-        {
-            use std::fs::File;
-            use std::io::Read;
-            let mut status = String::new();
-            if File::open("/proc/self/status")
-                .and_then(|mut f| f.read_to_string(&mut status))
-                .is_ok()
-            {
-                if let Some(line) = status.lines().find(|l| l.starts_with("VmRSS:")) {
-                    if let Some(kb) = line.split_whitespace().nth(1) {
-                        if let Ok(kb) = kb.parse::<u64>() {
-                            return kb * 1024;
-                        }
-                    }
-                }
-            }
-        }
-        0
+    pub async fn is_cpu_critical(&self) -> bool {
+        let usage = *self.cpu_usage.read().unwrap();
+        let threshold = *self.cpu_threshold.read().unwrap();
+        usage > threshold
     }
 
-    fn get_cpu_usage(&self) -> f64 {
-        #[cfg(target_os = "linux")]
-        {
-            use std::fs::File;
-            use std::io::Read;
-            let mut stat = String::new();
-            if File::open("/proc/self/stat")
-                .and_then(|mut f| f.read_to_string(&mut stat))
-                .is_ok()
-            {
-                let fields: Vec<&str> = stat.split_whitespace().collect();
-                if fields.len() > 13 {
-                    if let (Ok(utime), Ok(stime)) = (
-                        fields[13].parse::<u64>(),
-                        fields[14].parse::<u64>()
-                    ) {
-                        let total_time = utime + stime;
-                        let seconds = total_time as f64 / 100.0; // Convert jiffies to seconds
-                        return seconds * 100.0; // Convert to percentage
-                    }
-                }
-            }
-        }
-        0.0
+    pub async fn get_memory_usage(&self) -> u64 {
+        *self.memory_usage.read().unwrap()
+    }
+
+    pub async fn get_cpu_usage(&self) -> f64 {
+        *self.cpu_usage.read().unwrap()
     }
 }
 
-// Connection tracking
+// Connection tracker for managing active connections
+#[derive(Clone)]
 pub struct ConnectionTracker {
-    connection_limit: u64,
+    connections: Arc<RwLock<HashMap<String, u32>>>,
+    max_connections: Arc<RwLock<u32>>,
 }
 
 impl ConnectionTracker {
-    pub fn new(connection_limit: u64) -> Self {
-        Self { connection_limit }
-    }
-
-    pub fn track_connection(&self) -> bool {
-        let current = ACTIVE_CONNECTIONS.fetch_add(1, Ordering::Relaxed);
-        
-        // Record metrics
-        gauge!("active_connections", current as f64 + 1.0);
-        
-        if current >= self.connection_limit {
-            ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
-            false
-        } else {
-            true
+    pub fn new() -> Self {
+        Self {
+            connections: Arc::new(RwLock::new(HashMap::new())),
+            max_connections: Arc::new(RwLock::new(100)), // Default max connections
         }
     }
 
-    pub fn release_connection(&self) {
-        ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
+    pub fn with_max_connections(max: u32) -> Self {
+        Self {
+            connections: Arc::new(RwLock::new(HashMap::new())),
+            max_connections: Arc::new(RwLock::new(max)),
+        }
+    }
+
+    pub async fn check_limits(&self, room_id: &str) -> bool {
+        let connections = self.connections.read().unwrap();
+        let count = connections.get(room_id).copied().unwrap_or(0);
+        let max = *self.max_connections.read().unwrap();
+        
+        count < max
+    }
+
+    pub async fn add_connection(&self, room_id: &str) {
+        let mut connections = self.connections.write().unwrap();
+        *connections.entry(room_id.to_string()).or_insert(0) += 1;
+    }
+
+    pub async fn remove_connection(&self, room_id: &str) {
+        let mut connections = self.connections.write().unwrap();
+        if let Some(count) = connections.get_mut(room_id) {
+            if *count > 0 {
+                *count -= 1;
+            }
+        }
+    }
+
+    pub async fn get_connection_count(&self, room_id: &str) -> u32 {
+        let connections = self.connections.read().unwrap();
+        connections.get(room_id).copied().unwrap_or(0)
     }
 }
 
@@ -280,4 +300,23 @@ pub fn monitor_gc() {
             }
         });
     }
-} 
+}
+
+pub fn get_cpu_usage() -> f64 {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(cpu) = sys_info::cpu_num() {
+            if let Ok(load) = sys_info::loadavg() {
+                return load.one / cpu as f64 * 100.0;
+            }
+        }
+    }
+    
+    #[cfg(not(target_os = "linux"))]
+    {
+        // On non-Linux systems, return a dummy value
+        return 50.0;
+    }
+    
+    0.0
+}

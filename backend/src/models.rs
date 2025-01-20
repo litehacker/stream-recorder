@@ -112,16 +112,16 @@ pub struct RecordingListResponse {
 
 // WebSocket message types
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type")]
 pub enum WebSocketMessage {
-    Frame {
-        timestamp: i64,
-        data: Vec<u8>,
-        frame_type: FrameType,
-    },
-    Control {
-        action: ControlAction,
-    },
+    Frame(Frame),
+    Control(ControlAction),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Frame {
+    pub timestamp: i64,
+    pub frame_type: FrameType,
+    pub data: Vec<u8>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

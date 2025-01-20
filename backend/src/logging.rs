@@ -1,74 +1,107 @@
+/*
+ * logging.rs
+ * Purpose: Logging configuration and management
+ * 
+ * This file contains:
+ * - Logging setup with file and console output
+ * - Log rotation and cleanup functionality
+ * - Performance metrics logging helpers
+ * - Structured logging for errors and metrics
+ * - Custom log filtering for high-volume events
+ */
+
 use tracing_subscriber::{
-    fmt::{self, format::FmtSpan},
+    fmt,
     EnvFilter,
+    Layer,
     layer::SubscriberExt,
     util::SubscriberInitExt,
 };
-use std::time::Duration;
+use std::{io, time::Duration};
 use tokio::time::interval;
-use crate::error::ErrorMetrics;
+use serde_json;
+use crate::error::AppError;
 
-// Performance-optimized log buffer size
-const LOG_BUFFER_SIZE: usize = 8192;
-// Log rotation interval in seconds
-const LOG_ROTATION_INTERVAL: u64 = 3600;
+const LOG_DIR: &str = "logs";
+const MAX_LOG_SIZE: u64 = 10 * 1024 * 1024; // 10MB
+const MAX_LOG_FILES: usize = 5;
 
-pub fn setup_logging() {
-    // Create a custom format that includes essential information
+pub fn setup_logging() -> Result<(), AppError> {
+    // Create logs directory if it doesn't exist
+    std::fs::create_dir_all(LOG_DIR)?;
+
+    // Configure formatting
     let format = fmt::format()
         .with_level(true)
         .with_thread_ids(true)
         .with_thread_names(false) // Disable for performance
-        .with_target(false)       // Disable for performance
-        .with_file(true)
+        .with_target(true)
         .with_line_number(true)
-        .with_span_events(FmtSpan::CLOSE) // Only log span close events
+        .with_file(true)
         .compact();
 
-    // Create a buffered layer for better performance
-    let file_appender = tracing_appender::rolling::RollingFileAppender::new(
-        tracing_appender::rolling::RollingFileAppender::builder()
-            .rotation(tracing_appender::rolling::Rotation::DAILY)
-            .filename_prefix("stream-recorder")
-            .filename_suffix("log")
-            .build()
-            .unwrap(),
-    );
+    // Configure file appender
+    let file_appender = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(format!("{}/stream-recorder.log", LOG_DIR))?;
 
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    // Create subscribers
+    let file_layer = fmt::Layer::new()
+        .with_writer(file_appender)
+        .with_ansi(false)
+        .event_format(format.clone());
 
-    // Set up the subscriber with multiple layers
+    let stdout_layer = fmt::Layer::new()
+        .with_writer(io::stdout)
+        .with_ansi(true)
+        .event_format(format);
+
+    // Create filters
+    let file_filter = EnvFilter::new("debug");
+    let stdout_filter = EnvFilter::new("info");
+
+    // Combine layers with filters
     tracing_subscriber::registry()
-        .with(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,stream_recorder=debug".into())
-        )
-        // Console output for development
-        .with(
-            fmt::Layer::new()
-                .with_writer(std::io::stdout)
-                .with_filter(EnvFilter::new("info"))
-                .event_format(format.clone())
-        )
-        // File output with buffering
-        .with(
-            fmt::Layer::new()
-                .with_writer(non_blocking)
-                .with_filter(EnvFilter::new("debug"))
-                .event_format(format)
-                .with_ansi(false)
-        )
+        .with(file_layer.with_filter(file_filter))
+        .with(stdout_layer.with_filter(stdout_filter))
         .init();
 
-    // Start log rotation and cleanup task
-    tokio::spawn(async move {
-        let mut interval = interval(Duration::from_secs(LOG_ROTATION_INTERVAL));
-        loop {
-            interval.tick().await;
-            cleanup_old_logs().await;
-            ErrorMetrics::reset(); // Reset error metrics periodically
-        }
+    Ok(())
+}
+
+pub fn cleanup_old_logs() -> Result<(), AppError> {
+    let mut log_files: Vec<_> = std::fs::read_dir(LOG_DIR)?
+        .filter_map(|entry| entry.ok())
+        .collect();
+
+    // Sort by modified time
+    log_files.sort_by_key(|entry| {
+        entry.metadata()
+            .unwrap()
+            .modified()
+            .unwrap()
     });
+
+    // Remove old files if we have too many
+    while log_files.len() > MAX_LOG_FILES {
+        if let Some(file) = log_files.first() {
+            std::fs::remove_file(file.path())?;
+            log_files.remove(0);
+        }
+    }
+
+    // Check sizes and rotate if needed
+    for file in log_files {
+        let metadata = file.metadata()?;
+        if metadata.len() > MAX_LOG_SIZE {
+            let path = file.path();
+            let new_path = path.with_extension("log.old");
+            std::fs::rename(&path, &new_path)?;
+        }
+    }
+
+    Ok(())
 }
 
 // Structured logging helper for performance metrics
@@ -89,29 +122,6 @@ pub fn log_error_with_context(error: &str, context: &str, data: Option<&serde_js
         data = ?data,
         "Error occurred with context"
     );
-}
-
-// Cleanup old log files
-async fn cleanup_old_logs() {
-    use tokio::fs;
-    use chrono::{DateTime, Utc, Duration};
-
-    let log_dir = "logs";
-    let retention_days = 7;
-
-    if let Ok(mut entries) = fs::read_dir(log_dir).await {
-        let now = Utc::now();
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            if let Ok(metadata) = entry.metadata().await {
-                if let Ok(modified) = metadata.modified() {
-                    let modified: DateTime<Utc> = modified.into();
-                    if now - modified > Duration::days(retention_days) {
-                        let _ = fs::remove_file(entry.path()).await;
-                    }
-                }
-            }
-        }
-    }
 }
 
 // Performance monitoring for logging itself
