@@ -45,7 +45,8 @@ A high-performance video streaming and recording solution with WebRTC support.
 
    ```bash
    # For macOS
-   brew install docker docker-compose
+   # Install Docker Desktop from https://www.docker.com/products/docker-desktop
+   # Docker Compose is included with Docker Desktop for Mac
 
    # For Ubuntu/Debian
    sudo apt-get update
@@ -54,6 +55,16 @@ A high-performance video streaming and recording solution with WebRTC support.
    # For Windows
    # Download Docker Desktop from https://www.docker.com/products/docker-desktop
    ```
+
+   After installing Docker Desktop on macOS:
+
+   1. Launch Docker Desktop from Applications
+   2. Wait for the Docker engine to start (whale icon in menu bar)
+   3. Verify installation:
+      ```bash
+      docker --version
+      docker compose version
+      ```
 
 2. **Rust (for development)**
 
