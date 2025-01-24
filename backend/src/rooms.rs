@@ -42,6 +42,11 @@ impl Rooms {
         Ok(room)
     }
 
+    pub async fn list_rooms(&self) -> Result<Vec<Room>, AppError> {
+        let rooms = self.rooms.read().unwrap();
+        Ok(rooms.values().cloned().collect())
+    }
+
     pub async fn get_room(&self, room_id: &str) -> Result<Room, AppError> {
         let rooms = self.rooms.read().unwrap();
         rooms

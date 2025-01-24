@@ -23,18 +23,31 @@ export const RoomList: React.FC<RoomListProps> = ({
   const loadRooms = async () => {
     try {
       setLoading(true);
+      console.log("Fetching rooms...");
       const response = await apiClient.listRooms();
-      const validRooms = response.data.filter(
-        (room) => room && room.id && room.name
-      );
+      console.log("Rooms response:", response);
+
+      // Handle direct array response
+      const rooms = response.data || response;
+      console.log("Parsed rooms:", rooms);
+
+      const validRooms = rooms.filter((room) => room && room.id && room.name);
+      console.log("Valid rooms:", validRooms);
+
       setRooms(validRooms);
       setError(null);
     } catch (err) {
+      console.error("Error loading rooms:", err);
       setError(err instanceof Error ? err.message : "Failed to load rooms");
       setRooms([]);
     } finally {
       setLoading(false);
     }
+  };
+
+  // Add manual refresh capability
+  const handleRefresh = () => {
+    loadRooms();
   };
 
   useEffect(() => {
@@ -45,21 +58,29 @@ export const RoomList: React.FC<RoomListProps> = ({
     e.preventDefault();
     try {
       setLoading(true);
-      const response = await apiClient.createRoom(newRoom);
-      console.log("Room creation response:", response.data); // Debug log
+      setError(null);
 
-      if (response.data) {
-        setRooms((prevRooms) => [...prevRooms, response.data]);
-        setShowCreateForm(false);
-        setNewRoom({ name: "", max_participants: 10, recording_enabled: true });
-        setError(null);
-      } else {
-        console.error("Empty response data");
-        throw new Error("Failed to create room: No data received");
+      console.log("Creating room with data:", newRoom);
+      const response = await apiClient.createRoom(newRoom);
+      console.log("Room creation response:", response);
+
+      // Handle direct room response
+      const room = response.data || response;
+      if (!room || !room.id || !room.name) {
+        console.error("Invalid room data:", room);
+        throw new Error("Server returned invalid room data");
       }
+
+      setRooms((prevRooms) => [...prevRooms, room]);
+      setShowCreateForm(false);
+      setNewRoom({ name: "", max_participants: 10, recording_enabled: true });
     } catch (err) {
       console.error("Room creation error:", err);
-      setError(err instanceof Error ? err.message : "Failed to create room");
+      setError(
+        err instanceof Error
+          ? `Failed to create room: ${err.message}`
+          : "Failed to create room"
+      );
     } finally {
       setLoading(false);
     }
@@ -68,13 +89,36 @@ export const RoomList: React.FC<RoomListProps> = ({
   return (
     <div className="max-w-6xl mx-auto mt-10 p-6 bg-white rounded-lg shadow-lg">
       <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold">Available Rooms</h2>
-        <button
-          onClick={() => setShowCreateForm(!showCreateForm)}
-          className="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700"
-        >
-          {showCreateForm ? "Cancel" : "Create Room"}
-        </button>
+        {showCreateForm ? (
+          <div className="flex items-center space-x-4">
+            <button
+              onClick={() => setShowCreateForm(false)}
+              className="bg-gray-100 text-gray-600 px-3 py-2 rounded-md hover:bg-gray-200 flex items-center"
+            >
+              <span className="mr-1">←</span> Back
+            </button>
+            <h2 className="text-2xl font-bold">Create New Room</h2>
+          </div>
+        ) : (
+          <div className="flex items-center space-x-4">
+            <h2 className="text-2xl font-bold">Available Rooms</h2>
+            <button
+              onClick={handleRefresh}
+              className="bg-gray-100 text-gray-600 px-3 py-2 rounded-md hover:bg-gray-200 flex items-center"
+              title="Refresh room list"
+            >
+              🔄 Refresh
+            </button>
+          </div>
+        )}
+        {!showCreateForm && (
+          <button
+            onClick={() => setShowCreateForm(true)}
+            className="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700"
+          >
+            Create Room
+          </button>
+        )}
       </div>
 
       {error && (

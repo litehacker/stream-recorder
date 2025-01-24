@@ -15,6 +15,7 @@ use axum::{
     Router,
     routing::{get, post},
     extract::State,
+    middleware,
 };
 use tower::ServiceBuilder;
 use tower_http::{
@@ -33,6 +34,7 @@ use crate::{
     storage::Storage,
     monitoring::{MetricsStore, ResourceMonitor, ConnectionTracker},
     logging::setup_logging,
+    handlers::auth::require_auth,
 };
 
 mod error;
@@ -76,14 +78,20 @@ async fn main() -> Result<(), AppError> {
         connection_tracker: ConnectionTracker::new(),
     });
 
+    // Protected API routes
+    let api_routes = Router::new()
+        .route("/rooms", post(handlers::room::create_room))
+        .route("/rooms", get(handlers::room::list_rooms))
+        .route("/rooms/:id/recordings", get(handlers::room::list_recordings))
+        .route("/rooms/:id/ws", get(handlers::stream::ws_handler))
+        .layer(middleware::from_fn_with_state(state.clone(), require_auth));
+
     // Build router
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/metrics", get(metrics_handler))
         .route("/api/auth/credentials", post(handlers::auth::generate_credentials))
-        .route("/api/rooms", post(handlers::room::create_room))
-        .route("/api/rooms/:id/recordings", get(handlers::room::list_recordings))
-        .route("/api/rooms/:id/ws", get(handlers::stream::ws_handler))
+        .nest("/api", api_routes)
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .layer(TimeoutLayer::new(Duration::from_secs(30)))
@@ -103,30 +111,14 @@ async fn health_check() -> &'static str {
     "OK"
 }
 
-async fn metrics_handler(State(state): State<Arc<AppState>>) -> String {
+async fn metrics_handler(
+    State(state): State<Arc<AppState>>,
+) -> Result<String, AppError> {
     let mut output = String::new();
     
-    // Add metrics sections
-    output.push_str("# HELP stream_recorder_total_requests Total number of requests\n");
-    output.push_str("# TYPE stream_recorder_total_requests counter\n");
-    output.push_str(&format!("stream_recorder_total_requests {}\n", state.metrics.get_total_requests().await));
+    // Add basic metrics
+    output.push_str(&format!("rooms_total {}\n", state.rooms.list_rooms().await?.len()));
     
-    output.push_str("# HELP stream_recorder_error_rate Error rate percentage\n");
-    output.push_str("# TYPE stream_recorder_error_rate gauge\n");
-    output.push_str(&format!("stream_recorder_error_rate {}\n", state.metrics.get_error_rate().await));
-    
-    output.push_str("# HELP stream_recorder_avg_latency Average request latency in milliseconds\n");
-    output.push_str("# TYPE stream_recorder_avg_latency histogram\n");
-    output.push_str(&format!("stream_recorder_avg_latency {}\n", state.metrics.get_avg_latency().await));
-    
-    output.push_str("# HELP stream_recorder_memory_usage Memory usage in bytes\n");
-    output.push_str("# TYPE stream_recorder_memory_usage gauge\n");
-    output.push_str(&format!("stream_recorder_memory_usage {}\n", state.resource_monitor.get_memory_usage().await));
-    
-    output.push_str("# HELP stream_recorder_cpu_usage CPU usage percentage\n");
-    output.push_str("# TYPE stream_recorder_cpu_usage gauge\n");
-    output.push_str(&format!("stream_recorder_cpu_usage {}\n", state.resource_monitor.get_cpu_usage().await));
-    
-    output
+    Ok(output)
 }
 

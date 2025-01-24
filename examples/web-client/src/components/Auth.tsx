@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { ApiClient } from "../api";
 
 interface AuthProps {
@@ -11,39 +11,42 @@ export const Auth: React.FC<AuthProps> = ({ onAuthenticated }) => {
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
 
+  const handleSubmit = useCallback(
+    async (e: React.FormEvent | null) => {
+      e?.preventDefault();
+      if (!apiKey.trim()) {
+        setError("Please enter an API key");
+        return;
+      }
+
+      setLoading(true);
+      setLoadingMessage("Connecting to server");
+      setError("");
+
+      try {
+        const client = new ApiClient(apiKey);
+        await client.generateCredentials();
+        onAuthenticated(client);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to authenticate");
+        // Clear API key if it's invalid
+        if (err instanceof Error && err.message.includes("invalid")) {
+          setApiKey("");
+        }
+      } finally {
+        setLoading(false);
+        setLoadingMessage("");
+      }
+    },
+    [apiKey, onAuthenticated]
+  );
+
   // Auto-connect when API key is generated
   useEffect(() => {
     if (apiKey && loadingMessage === "Generated new API key") {
       handleSubmit(null);
     }
-  }, [apiKey]);
-
-  const handleSubmit = async (e: React.FormEvent | null) => {
-    e?.preventDefault();
-    if (!apiKey.trim()) {
-      setError("Please enter an API key");
-      return;
-    }
-
-    setLoading(true);
-    setLoadingMessage("Connecting to server");
-    setError("");
-
-    try {
-      const client = new ApiClient(apiKey);
-      await client.generateCredentials();
-      onAuthenticated(client);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to authenticate");
-      // Clear API key if it's invalid
-      if (err instanceof Error && err.message.includes("invalid")) {
-        setApiKey("");
-      }
-    } finally {
-      setLoading(false);
-      setLoadingMessage("");
-    }
-  };
+  }, [apiKey, handleSubmit, loadingMessage]);
 
   const handleGenerate = async () => {
     setLoading(true);

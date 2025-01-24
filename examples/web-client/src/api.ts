@@ -32,7 +32,10 @@ export class ApiClient {
     endpoint: string,
     options: RequestInit = {}
   ): Promise<ApiResponse<T>> {
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
+    const url = `${this.baseUrl}${endpoint}`;
+    console.log(`Making request to: ${url}`, { method: options.method });
+
+    const response = await fetch(url, {
       ...options,
       headers: {
         "Content-Type": "application/json",
@@ -41,12 +44,47 @@ export class ApiClient {
       },
     });
 
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error || "An error occurred");
+    const contentType = response.headers.get("content-type");
+    if (!contentType || !contentType.includes("application/json")) {
+      console.error("Non-JSON response received:", { contentType });
+      throw new Error("Invalid response format");
     }
 
-    return data;
+    let text;
+    try {
+      text = await response.text();
+      console.log("Raw response:", text);
+    } catch (e) {
+      console.error("Failed to read response:", e);
+      throw new Error("Failed to read response");
+    }
+
+    if (!text) {
+      throw new Error("Empty response received");
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (e) {
+      console.error("Failed to parse JSON:", e);
+      throw new Error("Invalid JSON response");
+    }
+
+    if (!response.ok) {
+      throw new Error(parsed?.error || "An error occurred");
+    }
+
+    // If the response is already in the format we want, use it directly
+    if (parsed.data) {
+      return parsed as ApiResponse<T>;
+    }
+
+    // Otherwise, wrap the response in our ApiResponse format
+    return {
+      data: parsed as T,
+      error: undefined,
+    };
   }
 
   async generateCredentials(): Promise<ApiResponse<{ token: string }>> {
@@ -63,7 +101,10 @@ export class ApiClient {
   }
 
   async listRooms(): Promise<ApiResponse<Room[]>> {
-    return this.request<Room[]>("/api/rooms");
+    console.log("Calling listRooms endpoint...");
+    const response = await this.request<Room[]>("/api/rooms");
+    console.log("ListRooms raw response:", response);
+    return response;
   }
 
   async getRoomRecordings(roomId: string): Promise<ApiResponse<string[]>> {

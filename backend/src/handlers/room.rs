@@ -71,6 +71,28 @@ pub async fn create_room(
     }))
 }
 
+pub async fn list_rooms(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<RoomResponse>>, AppError> {
+    info!("Listing rooms...");
+    let rooms = state.rooms.list_rooms().await?;
+    info!("Found {} rooms", rooms.len());
+    
+    let room_responses = rooms.into_iter()
+        .map(|room| RoomResponse {
+            id: room.id,
+            name: room.name,
+            max_participants: room.max_participants,
+            recording_enabled: room.recording_enabled,
+            current_participants: room.current_participants,
+            start_time: Utc::now(), // This should ideally come from room creation time
+            end_time: None,
+        })
+        .collect();
+
+    Ok(Json(room_responses))
+}
+
 pub async fn list_recordings(
     State(state): State<Arc<AppState>>,
     Path(room_id): Path<String>,

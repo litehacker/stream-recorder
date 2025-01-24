@@ -35,6 +35,7 @@ pub enum AppError {
     StorageError(String),
     StreamingError(String),
     InternalError(String),
+    JwtError(String),
 }
 
 #[derive(Debug, Serialize)]
@@ -53,6 +54,7 @@ impl fmt::Display for AppError {
             AppError::StorageError(msg) => write!(f, "Storage error: {}", msg),
             AppError::StreamingError(msg) => write!(f, "Streaming error: {}", msg),
             AppError::InternalError(msg) => write!(f, "Internal error: {}", msg),
+            AppError::JwtError(msg) => write!(f, "JWT error: {}", msg),
         }
     }
 }
@@ -83,6 +85,7 @@ impl IntoResponse for AppError {
             AppError::StorageError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
             AppError::StreamingError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
             AppError::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            AppError::JwtError(msg) => (StatusCode::UNAUTHORIZED, msg),
         };
 
         let body = Json(ErrorResponse {

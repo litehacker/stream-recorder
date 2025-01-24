@@ -11,36 +11,46 @@
  */
 
 use axum::{
-    extract::State,
-    http::StatusCode,
+    extract::{State},
+    http::{Request, StatusCode},
+    middleware::Next,
+    response::Response,
     Json,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use uuid;
-
+use uuid::Uuid;
 use crate::{AppState, error::AppError};
 
 #[derive(Debug, Serialize)]
-pub struct Credentials {
+pub struct CredentialsResponse {
     pub token: String,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct AuthRequest {
-    pub api_key: String,
+pub async fn generate_credentials(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<CredentialsResponse>, AppError> {
+    let api_key = Uuid::new_v4().to_string();
+    let token = state.auth.generate_token(&api_key)?;
+    
+    Ok(Json(CredentialsResponse { token }))
 }
 
-pub async fn generate_credentials(
-    State(state): State<Arc<crate::AppState>>,
-) -> Result<Json<String>, AppError> {
-    // Validate API key
-    if state.config.api_key.is_empty() {
-        return Err(AppError::Unauthorized("No API key configured".to_string()));
-    }
+pub async fn require_auth<B>(
+    State(state): State<Arc<AppState>>,
+    req: Request<B>,
+    next: Next<B>,
+) -> Result<Response, StatusCode> {
+    let auth_header = req
+        .headers()
+        .get("Authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
 
-    // Generate JWT token
-    let user_id = uuid::Uuid::new_v4().to_string();
-    let token = state.auth.generate_token(&user_id)?;
-    Ok(Json(token))
+    match auth_header {
+        Some(token) if state.auth.validate_token(token).is_ok() => {
+            Ok(next.run(req).await)
+        }
+        _ => Err(StatusCode::UNAUTHORIZED),
+    }
 } 
