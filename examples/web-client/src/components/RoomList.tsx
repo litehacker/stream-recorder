@@ -22,8 +22,16 @@ export const RoomList: React.FC<RoomListProps> = ({
 
   const loadRooms = async () => {
     try {
+      // Check for token before making request
+      const token = localStorage.getItem("jwt_token");
+      if (!token) {
+        setError("No authentication token found. Please log in again.");
+        setRooms([]);
+        return;
+      }
+
       setLoading(true);
-      console.log("Fetching rooms...");
+      console.log("Fetching rooms with token:", token.substring(0, 10) + "...");
       const response = await apiClient.listRooms();
       console.log("Rooms response:", response);
 
@@ -38,7 +46,23 @@ export const RoomList: React.FC<RoomListProps> = ({
       setError(null);
     } catch (err) {
       console.error("Error loading rooms:", err);
-      setError(err instanceof Error ? err.message : "Failed to load rooms");
+      let errorMessage = "Failed to load rooms";
+
+      // Handle specific error cases
+      if (err instanceof Error) {
+        if (
+          err.message.includes("401") ||
+          err.message.includes("unauthorized")
+        ) {
+          errorMessage = "Authentication failed. Please log in again.";
+        } else if (err.message.includes("403")) {
+          errorMessage = "You don't have permission to view rooms.";
+        } else {
+          errorMessage = err.message;
+        }
+      }
+
+      setError(errorMessage);
       setRooms([]);
     } finally {
       setLoading(false);
@@ -57,6 +81,13 @@ export const RoomList: React.FC<RoomListProps> = ({
   const handleCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      // Check for token before making request
+      const token = localStorage.getItem("jwt_token");
+      if (!token) {
+        setError("No authentication token found. Please log in again.");
+        return;
+      }
+
       setLoading(true);
       setError(null);
 
@@ -76,11 +107,23 @@ export const RoomList: React.FC<RoomListProps> = ({
       setNewRoom({ name: "", max_participants: 10, recording_enabled: true });
     } catch (err) {
       console.error("Room creation error:", err);
-      setError(
-        err instanceof Error
-          ? `Failed to create room: ${err.message}`
-          : "Failed to create room"
-      );
+      let errorMessage = "Failed to create room";
+
+      // Handle specific error cases
+      if (err instanceof Error) {
+        if (
+          err.message.includes("401") ||
+          err.message.includes("unauthorized")
+        ) {
+          errorMessage = "Authentication failed. Please log in again.";
+        } else if (err.message.includes("403")) {
+          errorMessage = "You don't have permission to create rooms.";
+        } else {
+          errorMessage = `Failed to create room: ${err.message}`;
+        }
+      }
+
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }

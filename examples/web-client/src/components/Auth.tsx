@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState } from "react";
 import { ApiClient } from "../api";
 
 interface AuthProps {
@@ -9,133 +9,76 @@ export const Auth: React.FC<AuthProps> = ({ onAuthenticated }) => {
   const [apiKey, setApiKey] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [loadingMessage, setLoadingMessage] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
 
-  const handleSubmit = useCallback(
-    async (e: React.FormEvent | null) => {
-      e?.preventDefault();
-      if (!apiKey.trim()) {
-        setError("Please enter an API key");
-        return;
-      }
-
-      setLoading(true);
-      setLoadingMessage("Connecting to server");
-      setError("");
-
-      try {
-        const client = new ApiClient(apiKey);
-        await client.generateCredentials();
-        onAuthenticated(client);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to authenticate");
-        // Clear API key if it's invalid
-        if (err instanceof Error && err.message.includes("invalid")) {
-          setApiKey("");
-        }
-      } finally {
-        setLoading(false);
-        setLoadingMessage("");
-      }
-    },
-    [apiKey, onAuthenticated]
-  );
-
-  // Auto-connect when API key is generated
-  useEffect(() => {
-    if (apiKey && loadingMessage === "Generated new API key") {
-      handleSubmit(null);
-    }
-  }, [apiKey, handleSubmit, loadingMessage]);
-
-  const handleGenerate = async () => {
+  const handleSignIn = async () => {
     setLoading(true);
-    setLoadingMessage("Generating new API key");
     setError("");
 
     try {
-      const tempClient = new ApiClient("");
-      const response = await tempClient.generateCredentials();
-      setApiKey(response.data.token);
+      // Use provided API key or empty string for auto-generation
+      const client = new ApiClient(apiKey);
+      await client.generateCredentials();
+      onAuthenticated(client);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Failed to generate API key"
-      );
+      setError(err instanceof Error ? err.message : "Failed to authenticate");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      handleSubmit(null);
-    }
-  };
-
   return (
     <div className="max-w-md mx-auto mt-10 p-6 bg-white rounded-lg shadow-lg">
-      <h2 className="text-2xl font-bold mb-6">Authentication</h2>
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
+      <h2 className="text-2xl font-bold mb-6">Welcome to Stream Recorder</h2>
+
+      {error && (
+        <div
+          role="alert"
+          className="text-red-600 text-sm bg-red-50 p-3 rounded border border-red-200 mb-4"
+        >
+          {error}
+        </div>
+      )}
+
+      {showApiKey ? (
+        <div className="mb-4">
           <label
             htmlFor="apiKey"
-            className="block text-sm font-medium text-gray-700"
+            className="block text-sm font-medium text-gray-700 mb-2"
           >
-            API Key
+            API Key (Optional)
           </label>
-          <div className="mt-1 relative rounded-md shadow-sm">
-            <input
-              id="apiKey"
-              type="password"
-              value={apiKey}
-              onChange={(e) => {
-                setApiKey(e.target.value);
-                if (error) setError("");
-              }}
-              onKeyDown={handleKeyPress}
-              className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
-              placeholder="Enter your API key"
-              disabled={loading}
-              aria-invalid={error ? "true" : "false"}
-              aria-describedby={error ? "auth-error" : undefined}
-            />
-          </div>
+          <input
+            id="apiKey"
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+            placeholder="Enter your API key"
+          />
         </div>
+      ) : (
+        <button
+          onClick={() => setShowApiKey(true)}
+          className="w-full mb-4 bg-gray-100 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 text-sm"
+        >
+          I have an API key
+        </button>
+      )}
 
-        {error && (
-          <div
-            id="auth-error"
-            role="alert"
-            className="text-red-600 text-sm bg-red-50 p-3 rounded border border-red-200"
-          >
-            {error}
-          </div>
-        )}
+      <button
+        onClick={handleSignIn}
+        disabled={loading}
+        className="w-full bg-indigo-600 text-white px-4 py-3 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200 text-lg font-medium"
+      >
+        {loading ? "Signing in..." : "Sign In"}
+      </button>
 
-        {loading && (
-          <div className="text-indigo-600 text-sm bg-indigo-50 p-3 rounded border border-indigo-200">
-            {loadingMessage}...
-          </div>
-        )}
-
-        <div className="flex space-x-4">
-          <button
-            type="submit"
-            disabled={loading}
-            className="flex-1 bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
-          >
-            {loading ? "Connecting..." : "Connect"}
-          </button>
-          <button
-            type="button"
-            onClick={handleGenerate}
-            disabled={loading}
-            className="flex-1 bg-gray-600 text-white px-4 py-2 rounded-md hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
-          >
-            {loading ? "Generating..." : "Generate New"}
-          </button>
-        </div>
-      </form>
+      <p className="mt-4 text-sm text-gray-600 text-center">
+        {showApiKey
+          ? "Or just click Sign In to continue without an API key"
+          : "Click to sign in and start recording your streams"}
+      </p>
     </div>
   );
 };

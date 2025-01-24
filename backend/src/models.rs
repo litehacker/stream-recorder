@@ -83,14 +83,19 @@ pub struct RoomConfig {
 // Request/Response structs
 #[derive(Debug, Deserialize)]
 pub struct CreateRoomRequest {
-    pub api_key: String,
-    pub config: Option<RoomConfig>,
+    pub name: String,
+    pub max_participants: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct CreateRoomResponse {
-    pub room_id: String,
-    pub access_token: String,
+pub struct RoomResponse {
+    pub id: String,
+    pub name: String,
+    pub max_participants: u32,
+    pub recording_enabled: bool,
+    pub current_participants: u32,
+    pub start_time: DateTime<Utc>,
+    pub end_time: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize)]

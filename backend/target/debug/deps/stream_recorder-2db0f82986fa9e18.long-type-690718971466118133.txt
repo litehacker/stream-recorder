@@ -1,0 +1,1 @@
+fn(axum::extract::State<Arc<AppState>>, Cookies, axum::Json<{type error}>) -> impl futures::Future<Output = Result<axum::Json<{type error}>, AppError>> {create_room}

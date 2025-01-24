@@ -302,3 +302,64 @@ A high-performance video streaming and recording solution with WebRTC support.
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Development
+
+### Environment Configuration
+
+The application supports different environments (development, testing, production) with separate database configurations:
+
+1. **Setup Environment**:
+
+   ```bash
+   # Copy example environment file
+   cp .env.example .env
+
+   # Edit .env file with your preferred settings
+   nano .env
+   ```
+
+2. **Available Environments**:
+
+   - Development (default):
+     ```
+     NODE_ENV=development
+     POSTGRES_DB=streamrecorder_dev
+     ```
+   - Testing:
+     ```
+     NODE_ENV=testing
+     POSTGRES_DB=streamrecorder_test
+     ```
+   - Production:
+     ```
+     NODE_ENV=production
+     POSTGRES_DB=streamrecorder_prod
+     POSTGRES_PASSWORD=your_secure_password
+     ```
+
+3. **Switch Environments**:
+   ```bash
+   # Edit .env file to change environment
+   # Then restart services:
+   docker-compose down
+   docker-compose up -d
+   ```
+
+### Making Changes to the Backend
+
+The backend is written in Rust, which is a compiled language. When you make changes to any Rust code in the `backend/` directory, you need to rebuild the service for changes to take effect:
+
+```bash
+# From the project root directory
+cd docker
+docker-compose up -d --build app
+```
+
+This will:
+
+- Rebuild the backend service with your changes
+- Restart the container with the new version
+- Keep all other services running
+
+Note: The `--build` flag is required to ensure Docker rebuilds the image instead of using a cached version.

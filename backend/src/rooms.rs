@@ -13,6 +13,7 @@ pub struct Room {
     pub max_participants: u32,
     pub recording_enabled: bool,
     pub current_participants: u32,
+    pub creator_id: String,
 }
 
 #[derive(Clone)]
@@ -29,7 +30,7 @@ impl Rooms {
         }
     }
 
-    pub async fn create_room(&self, id: String, name: String, max_participants: u32) -> Result<Room, AppError> {
+    pub async fn create_room(&self, id: String, name: String, max_participants: u32, creator_id: String) -> Result<Room, AppError> {
         let mut rooms = self.rooms.write().unwrap();
         let room = Room {
             id: id.clone(),
@@ -37,14 +38,27 @@ impl Rooms {
             max_participants,
             recording_enabled: true,
             current_participants: 0,
+            creator_id,
         };
         rooms.insert(id, room.clone());
         Ok(room)
     }
 
-    pub async fn list_rooms(&self) -> Result<Vec<Room>, AppError> {
+    pub fn list_all_rooms(&self) -> Result<Vec<Room>, AppError> {
         let rooms = self.rooms.read().unwrap();
         Ok(rooms.values().cloned().collect())
+    }
+
+    pub async fn list_rooms(&self, user_id: &str) -> Result<Vec<Room>, AppError> {
+        let rooms = self.rooms.read().unwrap();
+        if user_id == "*" {
+            Ok(rooms.values().cloned().collect())
+        } else {
+            Ok(rooms.values()
+                .filter(|room| room.creator_id == user_id)
+                .cloned()
+                .collect())
+        }
     }
 
     pub async fn get_room(&self, room_id: &str) -> Result<Room, AppError> {

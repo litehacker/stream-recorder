@@ -20,10 +20,11 @@ use axum::{
 use tower::ServiceBuilder;
 use tower_http::{
     trace::TraceLayer,
-    cors::CorsLayer,
+    cors::{CorsLayer, Any},
     compression::CompressionLayer,
     timeout::TimeoutLayer,
 };
+use tower_cookies::CookieManagerLayer;
 use tracing::info;
 
 use crate::{
@@ -45,6 +46,7 @@ mod storage;
 mod monitoring;
 mod logging;
 mod handlers;
+mod models;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -70,7 +72,7 @@ async fn main() -> Result<(), AppError> {
     // Initialize state
     let state = Arc::new(AppState {
         config: config.clone(),
-        auth: Auth::new(&config.jwt_secret)?,
+        auth: Auth::new(config.jwt_secret.as_bytes()),
         rooms: Rooms::new(),
         storage: Storage::new().await?,
         metrics: MetricsStore::new(),
@@ -93,8 +95,15 @@ async fn main() -> Result<(), AppError> {
         .route("/api/auth/credentials", post(handlers::auth::generate_credentials))
         .nest("/api", api_routes)
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_credentials(true)
+                .allow_methods(Any)
+                .allow_headers(Any)
+        )
         .layer(TimeoutLayer::new(Duration::from_secs(30)))
+        .layer(CookieManagerLayer::new())
         .with_state(state);
 
     // Start server
@@ -116,8 +125,8 @@ async fn metrics_handler(
 ) -> Result<String, AppError> {
     let mut output = String::new();
     
-    // Add basic metrics
-    output.push_str(&format!("rooms_total {}\n", state.rooms.list_rooms().await?.len()));
+    // Add basic metrics for all rooms
+    output.push_str(&format!("rooms_total {}\n", state.rooms.list_rooms("*").await?.len()));
     
     Ok(output)
 }

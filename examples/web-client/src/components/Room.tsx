@@ -27,8 +27,27 @@ export const Room: React.FC<RoomProps> = ({ room, onLeave }) => {
 
   const setupMediaStream = useCallback(async () => {
     try {
+      // First check if permissions are already granted
+      const permissions = await navigator.mediaDevices.enumerateDevices();
+      const hasVideoPermission = permissions.some(
+        (device) => device.kind === "videoinput" && device.label
+      );
+      const hasAudioPermission = permissions.some(
+        (device) => device.kind === "audioinput" && device.label
+      );
+
+      if (!hasVideoPermission || !hasAudioPermission) {
+        setError("Please allow camera and microphone access to join the room");
+        // Show a button to request permissions
+        return null;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30 },
+        },
         audio: true,
       });
       setLocalStream(stream);
@@ -38,11 +57,34 @@ export const Room: React.FC<RoomProps> = ({ room, onLeave }) => {
       }
       return stream;
     } catch (err) {
-      setError(
-        `Failed to access media devices: ${
-          err instanceof Error ? err.message : "Unknown error"
-        }`
-      );
+      if (err instanceof Error) {
+        if (
+          err.name === "NotAllowedError" ||
+          err.name === "PermissionDeniedError"
+        ) {
+          setError(
+            "Camera and microphone access was denied. Please allow access in your browser settings and try again."
+          );
+        } else if (
+          err.name === "NotFoundError" ||
+          err.name === "DevicesNotFoundError"
+        ) {
+          setError(
+            "No camera or microphone found. Please connect a device and try again."
+          );
+        } else if (
+          err.name === "NotReadableError" ||
+          err.name === "TrackStartError"
+        ) {
+          setError(
+            "Your camera or microphone is already in use by another application."
+          );
+        } else {
+          setError(`Failed to access media devices: ${err.message}`);
+        }
+      } else {
+        setError("An unknown error occurred while accessing media devices");
+      }
       return null;
     }
   }, []);
@@ -54,8 +96,15 @@ export const Room: React.FC<RoomProps> = ({ room, onLeave }) => {
         return;
       }
 
+      // Get the JWT token from localStorage
+      const token = localStorage.getItem("jwt_token");
+      if (!token) {
+        setError("No authentication token found");
+        return;
+      }
+
       const ws = new WebSocket(
-        `${process.env.REACT_APP_WS_URL}/api/rooms/${room.id}/ws`
+        `${process.env.REACT_APP_WS_URL}/api/rooms/${room.id}/ws?token=${token}`
       ) as WebSocketWithRef;
       ws.wasManuallyClosedRef = { current: false };
       wsRef.current = ws;
@@ -74,12 +123,29 @@ export const Room: React.FC<RoomProps> = ({ room, onLeave }) => {
           switch (data.type) {
             case "participant_joined":
               console.log("New participant joined:", data.participantId);
+              // Add remote stream for new participant
+              if (data.stream) {
+                setRemoteStreams((streams) => [
+                  ...streams,
+                  new MediaStream(data.stream),
+                ]);
+              }
               break;
             case "participant_left":
               console.log("Participant left:", data.participantId);
+              // Remove remote stream for participant
+              if (data.participantId) {
+                setRemoteStreams((streams) =>
+                  streams.filter((_, index) => index !== data.participantId)
+                );
+              }
               break;
             case "stream":
               // Handle incoming media stream
+              if (data.stream) {
+                const mediaStream = new MediaStream(data.stream);
+                setRemoteStreams((streams) => [...streams, mediaStream]);
+              }
               break;
             default:
               console.log("Received message:", data);
@@ -183,6 +249,24 @@ export const Room: React.FC<RoomProps> = ({ room, onLeave }) => {
     }
   };
 
+  // Add a function to request permissions explicitly
+  const requestMediaPermissions = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true,
+      });
+      // Stop the stream immediately as we just want to trigger the permission prompt
+      stream.getTracks().forEach((track) => track.stop());
+      // Try to set up the media stream again
+      connectToRoom();
+    } catch (err) {
+      if (err instanceof Error) {
+        setError(`Failed to get permissions: ${err.message}`);
+      }
+    }
+  };
+
   return (
     <div className="max-w-6xl mx-auto mt-10 p-6 bg-white rounded-lg shadow-lg">
       <div className="flex justify-between items-center mb-6">
@@ -253,6 +337,14 @@ export const Room: React.FC<RoomProps> = ({ room, onLeave }) => {
       {error && (
         <div className="mb-4 p-4 bg-red-100 text-red-700 rounded-md border border-red-200">
           {error}
+          {(error.includes("allow") || error.includes("denied")) && (
+            <button
+              onClick={requestMediaPermissions}
+              className="ml-4 bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 transition-colors"
+            >
+              Request Permissions
+            </button>
+          )}
         </div>
       )}
 

@@ -1,0 +1,1 @@
+axum::middleware::FromFn<fn(axum::extract::State<Arc<AppState>>, {type error}, hyper::Request<_>, axum::middleware::Next<_>) -> impl futures::Future<Output = Result<Response<http_body::combinators::box_body::UnsyncBoxBody<axum::body::Bytes, axum::Error>>, hyper::StatusCode>> {require_auth::<_>}, Arc<AppState>, Route<_>, _>

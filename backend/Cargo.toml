@@ -23,4 +23,5 @@ futures = "0.3"
 futures-util = "0.3"
 sys-info = "0.9"
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
-redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] } 
+redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
+tower-cookies = "0.9.0" 

@@ -37,9 +37,14 @@ export class ApiClient {
 
     const response = await fetch(url, {
       ...options,
+      credentials: "include", // This is required for cookies
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
+        ...(endpoint === "/api/auth/credentials"
+          ? {
+              Authorization: `Bearer ${this.apiKey}`,
+            }
+          : {}),
         ...options.headers,
       },
     });
@@ -87,8 +92,8 @@ export class ApiClient {
     };
   }
 
-  async generateCredentials(): Promise<ApiResponse<{ token: string }>> {
-    return this.request<{ token: string }>("/api/auth/credentials", {
+  async generateCredentials(): Promise<ApiResponse<{ message: string }>> {
+    return this.request<{ message: string }>("/api/auth/credentials", {
       method: "POST",
     });
   }

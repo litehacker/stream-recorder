@@ -1,12 +1,17 @@
-use jsonwebtoken::{encode, decode, Header, EncodingKey, DecodingKey, Validation, errors::Error as JwtError};
+use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
+use chrono::{Utc, Duration};
+use uuid::Uuid;
+
 use crate::error::AppError;
+
+const JWT_SECRET: &[u8] = b"your-secret-key";  // In production, this should be properly configured
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
-    sub: String,
-    exp: usize,
+    pub sub: String,      // Subject (API key)
+    pub user_id: String,  // Unique user ID
+    pub exp: i64,         // Expiration time
 }
 
 #[derive(Clone)]
@@ -16,35 +21,37 @@ pub struct Auth {
 }
 
 impl Auth {
-    pub fn new(jwt_secret: &str) -> Result<Self, AppError> {
-        Ok(Self {
-            encoding_key: EncodingKey::from_secret(jwt_secret.as_bytes()),
-            decoding_key: DecodingKey::from_secret(jwt_secret.as_bytes()),
-        })
+    pub fn new(jwt_secret: &[u8]) -> Self {
+        Self {
+            encoding_key: EncodingKey::from_secret(jwt_secret),
+            decoding_key: DecodingKey::from_secret(jwt_secret),
+        }
     }
 
-    pub fn generate_token(&self, user_id: &str) -> Result<String, AppError> {
-        let expiration = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as usize + 24 * 3600; // 24 hours from now
+    pub fn generate_token(&self, api_key: &str) -> Result<String, AppError> {
+        let user_id = Uuid::new_v4().to_string();
+        let expiration = Utc::now()
+            .checked_add_signed(Duration::hours(24))
+            .expect("valid timestamp")
+            .timestamp();
 
         let claims = Claims {
-            sub: user_id.to_string(),
+            sub: api_key.to_string(),
+            user_id,
             exp: expiration,
         };
 
         encode(&Header::default(), &claims, &self.encoding_key)
-            .map_err(|e| AppError::JwtError(e.to_string()))
+            .map_err(|e| AppError::Unauthorized(format!("Failed to create token: {}", e)))
     }
 
-    pub fn validate_token(&self, token: &str) -> Result<(), AppError> {
+    pub fn validate_token(&self, token: &str) -> Result<Claims, AppError> {
         decode::<Claims>(
             token,
             &self.decoding_key,
             &Validation::default(),
         )
-        .map(|_| ())
-        .map_err(|e| AppError::JwtError(e.to_string()))
+        .map(|token_data| token_data.claims)
+        .map_err(|e| AppError::Unauthorized(format!("Invalid token: {}", e)))
     }
 } 

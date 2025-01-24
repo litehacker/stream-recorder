@@ -13,7 +13,8 @@ services:
       - minio
     environment:
       - RUST_LOG=info
-      - DATABASE_URL=postgres://postgres:password@postgres/streamrecorder
+      - NODE_ENV=${NODE_ENV:-development}
+      - DATABASE_URL=postgres://postgres:${POSTGRES_PASSWORD:-password}@postgres/${POSTGRES_DB:-streamrecorder_dev}
       - REDIS_URL=redis://redis
       - MINIO_ENDPOINT=http://minio:9000
       - METRICS_ENDPOINT=http://prometheus:9090
@@ -21,10 +22,13 @@ services:
   postgres:
     image: postgres:15
     environment:
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: streamrecorder
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-streamrecorder_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
 
   redis:
     image: redis:7

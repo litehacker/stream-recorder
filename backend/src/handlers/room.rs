@@ -10,35 +10,22 @@
  * - Room metrics collection
  */
 
+use crate::{
+    error::AppError,
+    models::{CreateRoomRequest, RoomResponse},
+    AppState,
+};
+
 use axum::{
     extract::{Path, State},
     Json,
 };
+use tower_cookies::Cookies;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::info;
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
-
-use crate::{AppState, error::AppError};
-
-#[derive(Debug, Deserialize)]
-pub struct CreateRoomRequest {
-    pub name: String,
-    pub max_participants: Option<u32>,
-    pub recording_enabled: Option<bool>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct RoomResponse {
-    pub id: String,
-    pub name: String,
-    pub max_participants: u32,
-    pub recording_enabled: bool,
-    pub current_participants: u32,
-    pub start_time: DateTime<Utc>,
-    pub end_time: Option<DateTime<Utc>>,
-}
 
 #[derive(Debug, Serialize)]
 pub struct Recording {
@@ -51,15 +38,24 @@ pub struct Recording {
 
 pub async fn create_room(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<CreateRoomRequest>,
+    cookies: Cookies,
+    Json(req): Json<CreateRoomRequest>,
 ) -> Result<Json<RoomResponse>, AppError> {
-    let room_id = Uuid::new_v4().to_string();
-    let room = state.rooms.create_room(
-        room_id,
-        request.name,
-        request.max_participants.unwrap_or(10),
-    ).await?;
+    let token = cookies.get("jwt_token")
+        .ok_or_else(|| AppError::Unauthorized("No authentication token found".to_string()))?
+        .value()
+        .to_string();
+    
+    let claims = state.auth.validate_token(&token)?;
+    let user_id = claims.user_id.clone();
 
+    let room = state.rooms.create_room(
+        Uuid::new_v4().to_string(),
+        req.name,
+        req.max_participants.unwrap_or(10),  // Default to 10 if not specified
+        user_id,
+    ).await?;
+    
     Ok(Json(RoomResponse {
         id: room.id,
         name: room.name,
@@ -73,10 +69,18 @@ pub async fn create_room(
 
 pub async fn list_rooms(
     State(state): State<Arc<AppState>>,
+    cookies: Cookies,
 ) -> Result<Json<Vec<RoomResponse>>, AppError> {
-    info!("Listing rooms...");
-    let rooms = state.rooms.list_rooms().await?;
-    info!("Found {} rooms", rooms.len());
+    // Get user_id from JWT token in cookie
+    let token = cookies.get("jwt_token")
+        .ok_or_else(|| AppError::Unauthorized("No authentication token found".to_string()))?
+        .value()
+        .to_string();
+    
+    let claims = state.auth.validate_token(&token)?;
+    let user_id = claims.user_id.clone();
+    
+    let rooms = state.rooms.list_rooms(&user_id).await?;
     
     let room_responses = rooms.into_iter()
         .map(|room| RoomResponse {
@@ -101,7 +105,7 @@ pub async fn list_recordings(
     
     let recordings = filenames.into_iter()
         .map(|filename| Recording {
-            id: Uuid::new_v4().to_string(),
+            id: filename.clone(),
             room_id: room_id.clone(),
             start_time: Utc::now(), // This should be parsed from filename
             end_time: None,
